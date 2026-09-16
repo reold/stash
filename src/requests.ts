@@ -48,7 +48,12 @@ export const gameServer = {
     return await resp.json();
   },
 
-  action: async (game_id, username: string, type: number, card: number = 0) => {
+  action: async (
+    game_id: string,
+    username: string,
+    type: number,
+    card: number = 0
+  ) => {
     let body = JSON.stringify({ username, type, card });
 
     let resp = await fetch(`${apiURL}/${game_id}/action`, {

@@ -3,39 +3,47 @@
 
   import { cardHelper } from "./card";
 
-  export let id: string = undefined;
-  export let index: number = 0;
-  export let card: number;
-  export let isDropping: boolean = false;
-  export let handleDropCard = undefined;
-  export let exitAnim: boolean = true;
+  let {
+    id = undefined,
+    index = 0,
+    card,
+    isDropping = false,
+    handleDropCard = undefined,
+    exitAnim = true,
+    class: extraClass = "",
+    style: extraStyle = "",
+  }: {
+    id?: string;
+    index?: number;
+    card: number;
+    isDropping?: boolean;
+    handleDropCard?: (index: number) => void;
+    exitAnim?: boolean;
+    class?: string;
+    style?: string;
+  } = $props();
 
-  let extraStyle = "";
-  let extraClass = "";
-  export { extraStyle as style, extraClass as class };
+  const parsed = $derived.by(() => {
+    const number = cardHelper.parseNumber(card);
+    const type = cardHelper.parseType(card);
 
-  let parsed = { number: 404, color: "nocolor", type: "number", display: "" };
+    let display = "";
 
-  $: {
-    parsed.number = cardHelper.parseNumber(card);
-    parsed.type = cardHelper.parseType(card);
-
-    if (parsed.type == "number") {
-      parsed.display = `${parsed.number}`;
-    } else if (parsed.type == "plus2") {
-      parsed.display = "+2";
-    } else if (parsed.type == "plus4") {
-      parsed.display = "+4";
-    } else if (parsed.type == "reverse") {
-      parsed.display = "rev";
+    if (type == "number") {
+      display = `${number}`;
+    } else if (type == "plus2") {
+      display = "+2";
+    } else if (type == "plus4") {
+      display = "+4";
+    } else if (type == "reverse") {
+      display = "rev";
     }
 
-    if (parsed.number == 15 || parsed.type != "plus4")
-      parsed.color = cardHelper.parseColor(card);
-    else {
-      parsed.color = "nocolor";
-    }
-  }
+    const color =
+      number == 15 || type != "plus4" ? cardHelper.parseColor(card) : "nocolor";
+
+    return { number, color, type, display };
+  });
 </script>
 
 <button
@@ -45,7 +53,7 @@
   style="visibility: {isDropping
     ? 'hidden'
     : 'visible'}; text-shadow: 0.05em 0.05em 0em black; background-image: radial-gradient(circle, var(--{parsed.color}) 50%, hsl(var(--{parsed.color}-h), 50%, 50%));{extraStyle}"
-  on:click={() => {
+  onclick={() => {
     if (handleDropCard) handleDropCard(index);
   }}
 >
@@ -97,46 +105,3 @@
     >
   </svg></button
 >
-<!-- 
-<button
-  out:fade={{ duration: exitAnim ? 500 : 0 }}
-  id={id ? id : `${card}`}
-  class="h-[22vh] min-w-[15vh] max-w-[15vh] text-5xl text-center flex flex-col justify-center items-center hover:scale-125 duration-100 rounded-md shadow-md shadow-black {extraClass}"
-  style="visibility: {isDropping
-    ? 'hidden'
-    : 'visible'}; text-shadow: 0.05em 0.05em 0.1em black; background-color: var(--{parsed.color});"
-  on:click={() => {
-    if (handleDropCard) handleDropCard(index);
-  }}
->
-  {#if parsed.type == "number"}
-    <div class="w-full">
-      {parsed.number}
-
-      <p class="text-xs">
-        {card.toString(2)}
-      </p>
-    </div>
-  {:else if parsed.type == "plus2"}
-    <div class="w-full">
-      +2
-      <p class="text-xs">
-        {card.toString(2)}
-      </p>
-    </div>
-  {:else if parsed.type == "plus4"}
-    <div class="w-full">
-      +4
-      <p class="text-xs">
-        {card.toString(2)}
-      </p>
-    </div>
-  {:else if parsed.type == "reverse"}
-    <div class="w-full">
-      rev
-      <p class="text-xs">
-        {card.toString(2)}
-      </p>
-    </div>
-  {/if}
-</button> -->

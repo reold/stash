@@ -1,123 +1,77 @@
-<script context="module" lang="ts">
-  import { writable, derived, get } from "svelte/store";
-  import type { Writable } from "svelte/store";
-
-  export class StateMachine {
-    state: Writable<object>;
-    machine: Writable<object>;
-
-    constructor(state: Writable<object>, machine: Writable<object>) {
-      this.state = state;
-      this.machine = machine;
-    }
-  }
-
-  export class UnoMachine extends StateMachine {
-    game_id: string;
-    username: string;
-
-    constructor(
-      game_id: string,
-      state: Writable<object>,
-      machine: Writable<object>
-    ) {
-      super(state, machine);
-
-      this.game_id = game_id;
-    }
-
-    load(data) {
-      this.state.update((state) => {
-        state = data;
-        return state;
-      });
-    }
-
-    initialize(username) {
-      this.username = username;
-
-      this.machine.update((machineState) => {
-        machineState["ready"] = false;
-        return machineState;
-      });
-
-      gameServer
-        .state(this.game_id, 3, this.username)
-        .then((data) => {
-          this.load(data);
-          this.machine.update((machineState) => {
-            machineState["ready"] = true;
-            return machineState;
-          });
-          console.debug("initialized state", get(this.state));
-        })
-        .catch((error: Error) => {
-          appendNotification(`error during initialization,  ${error.message}`);
-        });
-    }
-  }
-</script>
-
 <script lang="ts">
   import { onMount } from "svelte";
-  import { gameServer } from "./requests";
-
-  import { appendNotification } from "./App.svelte";
+  import { cubicInOut } from "svelte/easing";
+  import { blur } from "svelte/transition";
 
   import Card from "./Card.svelte";
-  import CardFace from "./assets/CardFace.png";
-
+  import { gameServer } from "./requests";
+  import {
+    appendNotification,
+    type GameState,
+    type HandleColorSelect,
+    type MachineState,
+    type Progress,
+  } from "./store.svelte";
+  import { animate } from "./utils/anim";
+  import { UnoMachine } from "./utils/machine";
   import { sounds } from "./utils/sound";
 
-  import { blur } from "svelte/transition";
-  import { tweened } from "svelte/motion";
-  import { cubicInOut } from "svelte/easing";
+  import CardFace from "./assets/CardFace.png";
 
-  export let game_id: string = "3370.6-dumbell";
-  export let username: string = "dumbell";
-  export let handleColorSelect;
-  export let progress;
+  let {
+    game_id = "3370.6-dumbell",
+    username = "dumbell",
+    handleColorSelect,
+    progress,
+  }: {
+    game_id?: string;
+    username?: string;
+    handleColorSelect: HandleColorSelect;
+    progress: Progress;
+  } = $props();
 
-  let preference = { isFastClient: false, fullscreen: false };
+  let preference = $state({ isFastClient: false, fullscreen: false });
 
-  let machineState = writable({ ready: false });
-  let gameState = writable({});
-  let playerState = derived(gameState, (state) => {
-    return { cards: state["cards"], debt: state["debt"], cred: state["cred"] };
+  let machineState = $state<MachineState>({ ready: false });
+  let gameState = $state({} as GameState);
+  const playerState = $derived({
+    cards: gameState.cards,
+    debt: gameState.debt,
+    cred: gameState.cred,
   });
 
   const dept1StateUpdate = async () => {
     try {
       let data = await gameServer.state(game_id, 1, username);
-      $gameState = { ...$gameState, ...data };
+      Object.assign(gameState, data);
 
       console.debug("dept-1 state update");
-      console.log($playerState);
+      console.log(playerState);
     } catch (error) {
-      appendNotification(`state update failed (${error.message})(dept-1)`);
+      appendNotification(`state update failed (${(error as Error).message})(dept-1)`);
     }
   };
 
   const dept2StateUpdate = async () => {
     try {
       let data = await gameServer.state(game_id, 2, username);
-      $gameState = { ...$gameState, ...data };
+      Object.assign(gameState, data);
 
       console.debug("dept-2 state update");
-      console.log($playerState);
+      console.log(playerState);
 
       // neutralize user debt
-      if ($playerState.debt > 0) {
-        appendNotification(`pulling ${$playerState.debt} cards from stash`);
+      if (playerState.debt > 0) {
+        appendNotification(`pulling ${playerState.debt} cards from stash`);
         try {
           let data = await gameServer.action(game_id, username, 0b10);
-          $gameState = { ...$gameState, ...data };
+          Object.assign(gameState, data);
         } catch {
           appendNotification("failed to neutralize debt");
         }
       }
     } catch (error) {
-      appendNotification(`state update failed (${error.message})(dept-2)`);
+      appendNotification(`state update failed (${(error as Error).message})(dept-2)`);
     }
   };
 
@@ -126,20 +80,22 @@
     game = new UnoMachine(game_id, gameState, machineState);
     game.initialize(username);
 
+    let timeout: ReturnType<typeof setTimeout>;
+
     const stateUpdateLoop = async () => {
-      if ($machineState.ready && $gameState["current"] !== username) {
+      if (machineState.ready && gameState["current"] !== username) {
         progress.zero();
         progress.set(25);
 
         // dept-0 state update
-        if (!$gameState["filled"]) {
+        if (!gameState["filled"]) {
           try {
             let data = await gameServer.state(game_id, 0, username);
-            $gameState = { ...$gameState, ...data };
+            Object.assign(gameState, data);
             console.debug("dept-0 state update");
           } catch (error) {
             appendNotification(
-              `state update failed (${error.message})(dept-0)`
+              `state update failed (${(error as Error).message})(dept-0)`
             );
           }
         } else {
@@ -149,9 +105,14 @@
         progress.complete();
       }
 
-      setTimeout(stateUpdateLoop, (preference.isFastClient ? 3 : 5) * 1000);
+      timeout = setTimeout(
+        stateUpdateLoop,
+        (preference.isFastClient ? 3 : 5) * 1000
+      );
     };
     stateUpdateLoop();
+
+    return () => clearTimeout(timeout);
   });
 
   const toggleFullscreen = () => {
@@ -188,7 +149,7 @@
     gameServer
       .action(game_id, username, 1)
       .then((data) => {
-        $gameState["cards"] = data;
+        gameState["cards"] = data;
         dept1StateUpdate();
       })
       .catch((error) => {
@@ -196,16 +157,16 @@
       });
   };
 
-  const handleDropCard = async (index) => {
-    if (!$gameState["filled"]) {
+  const handleDropCard = async (index: number) => {
+    if (!gameState["filled"]) {
       appendNotification("wait for players to join", 1);
       return;
-    } else if ($gameState["current"] != username) {
+    } else if (gameState["current"] != username) {
       appendNotification("it's not your turn!", 1);
       return;
     }
 
-    let card = $playerState["cards"][index];
+    let card = playerState["cards"][index];
     const card_id = `${card}-${index}`;
 
     if ((card & 11_00_0000) >> 6 == 0b10) {
@@ -221,10 +182,10 @@
     gameServer
       .action(game_id, username, 0, card)
       .then(() => {
-        const dropElement = document.getElementById("dropcard");
-        let cardEle = document.getElementById(card_id);
+        const dropElement = document.getElementById("dropcard")!;
+        let cardEle = document.getElementById(card_id)!;
 
-        const playgroundElm = document.getElementById("playground");
+        const playgroundElm = document.getElementById("playground")!;
         let fakeCard: HTMLButtonElement = cardEle.cloneNode(
           true
         ) as HTMLButtonElement;
@@ -232,64 +193,61 @@
         fakeCard.id = `${fakeCard.id}-fake`;
         fakeCard.style.position = "absolute";
 
-        const parentElement = cardEle.parentElement;
-        const twnFakeCard = tweened(
-          [
-            cardEle.offsetLeft - parentElement.scrollLeft,
-            cardEle.offsetTop,
-            parseFloat(cardEle.style.transform.split("(")[1].split("d")[0]),
-          ],
-          {
-            duration: 1500,
-            easing: cubicInOut,
-          }
-        );
+        const parentElement = cardEle.parentElement!;
+        const from = [
+          cardEle.offsetLeft - parentElement.scrollLeft,
+          cardEle.offsetTop,
+          parseFloat(cardEle.style.transform.split("(")[1].split("d")[0]),
+        ];
 
-        twnFakeCard.subscribe(([x, y, rot]) => {
-          fakeCard.style.left = `${x}px`;
-          fakeCard.style.top = `${y}px`;
-          fakeCard.style.transform = `rotate(${Math.round(rot)}deg)`;
-        });
+        // the clone has no position of its own yet, park it on the card it
+        // was cloned from before the first frame is painted
+        fakeCard.style.left = `${from[0]}px`;
+        fakeCard.style.top = `${from[1]}px`;
+        fakeCard.style.transform = `rotate(${Math.round(from[2])}deg)`;
 
         playgroundElm.appendChild(fakeCard);
-        gameState.update((state) => {
-          state["cards"].splice(index, 1);
+        gameState.cards.splice(index, 1);
 
-          return state;
+        animate(
+          from,
+          [dropElement.offsetLeft, dropElement.offsetTop, 0],
+          { duration: 1500, easing: cubicInOut },
+          ([x, y, rot]) => {
+            fakeCard.style.left = `${x}px`;
+            fakeCard.style.top = `${y}px`;
+            fakeCard.style.transform = `rotate(${Math.round(rot)}deg)`;
+          }
+        ).then(async () => {
+          fakeCard.remove();
+          gameState["ref_card"] = card;
+          await dept1StateUpdate();
         });
-
-        twnFakeCard
-          .set([dropElement.offsetLeft, dropElement.offsetTop, 0])
-          .then(async () => {
-            fakeCard.remove();
-            $gameState["ref_card"] = card;
-            await dept1StateUpdate();
-          });
       })
       .catch((error) => {
-        appendNotification(`error, ${error.message}`);
+        appendNotification(`error, ${(error as Error).message}`);
       });
   };
 
-  $: {
-    if ($gameState["current"] == username) {
-      sounds.interactive.ping.play();
+  $effect(() => {
+    if (gameState["current"] == username) {
+      sounds.interactive.ping.play().catch(() => {});
     }
-  }
+  });
 </script>
 
 <div
   id="playground"
-  class="relative {$gameState['current'] == username
+  class="relative {gameState['current'] == username
     ? ''
     : 'bg-gray-950'} h-[95vh] py-[5vh] flex flex-col justify-center items-center space-y-5 select-none transition-colors duration-1000"
 >
-  {#if $machineState["ready"]}
+  {#if machineState["ready"]}
     <div
       class="select-text grid grid-cols-3 gap-1 p-1 text-xs backdrop-brightness-75 rounded-md ring-0 ring-gray-500"
       style="text-shadow: 1px 1px black"
     >
-      <button on:click={handleShareGame} class="p-0.5 rounded-md"
+      <button onclick={handleShareGame} class="p-0.5 rounded-md"
         ><svg
           xmlns="http://www.w3.org/2000/svg"
           fill="none"
@@ -311,7 +269,7 @@
         class="p-1 {preference.isFastClient
           ? 'text-orange-600 font-black'
           : ''}"
-        on:click={() => {
+        onclick={() => {
           preference.isFastClient = !preference.isFastClient;
         }}
       >
@@ -329,7 +287,7 @@
         </svg>
         fast client
       </button>
-      <button on:click={toggleFullscreen}>
+      <button onclick={toggleFullscreen}>
         {#if preference.fullscreen}
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -366,12 +324,12 @@
       </button>
       <div class="col-span-3 text-center rounded-md">
         <p class="font-pop font-semibold p-1">
-          {#if !$gameState["filled"]}
+          {#if !gameState["filled"]}
             waiting for players to join
           {:else}
-            {$gameState["current"] == username
+            {gameState["current"] == username
               ? "your turn to make a move!"
-              : `${$gameState["current"]} is making a move`}
+              : `${gameState["current"]} is making a move`}
           {/if}
         </p>
       </div>
@@ -379,27 +337,25 @@
     <div class="w-full flex flex-row justify-evenly items-center">
       <Card
         id="dropcard"
-        card={$gameState["ref_card"]}
+        card={gameState["ref_card"]}
         class="ring-gray-800 ring-4 rounded-md"
       />
 
       <button
         class="relative w-[15vh] h-[22vh] bg-gray-900 ring-gray-800 ring-4 rounded-md p-1"
         id="stash"
-        on:click={() => {
+        onclick={() => {
           appendNotification("pulling card from stash", 1);
           handleTakeCard();
         }}
       >
         <img src={CardFace} alt="card face" />
-        {#if $playerState["cred"] >= 0}
-          <p
-            class="absolute bottom-2 text-center bg-gray-800 rounded-md p-[1px]"
-          >
-            {$gameState["config"]["cred_count"] - $playerState["cred"] == 0
+        {#if playerState["cred"] >= 0}
+          <p class="absolute bottom-2 text-center bg-gray-800 rounded-md p-[1px]">
+            {gameState["config"]["cred_count"] - playerState["cred"] == 0
               ? `no pulls left`
               : `${
-                  $gameState["config"]["cred_count"] - $playerState["cred"]
+                  gameState["config"]["cred_count"] - playerState["cred"]
                 } pullable!`}
           </p>
         {/if}
@@ -408,11 +364,11 @@
     <div
       class="grid grid-cols-2 sm:grid-cols-1 justify-around items-center space-x-2 my-[2vh]"
     >
-      {#each $gameState["oppstate"] as opp}
+      {#each gameState["oppstate"] ?? [] as opp}
         <div
           class="flex flex-col justify-center items-center text-xs {opp[
             'username'
-          ] == $gameState['current']
+          ] == gameState['current']
             ? 'animate-pulse'
             : ''}"
         >
@@ -431,7 +387,7 @@
                     amount: 25,
                     duration: 2 * 1000,
                   }}
-                  class="w-[5vh] h-[7vh] bg-gray-900 duration-1000 {$gameState[
+                  class="w-[5vh] h-[7vh] bg-gray-900 duration-1000 {gameState[
                     'current'
                   ] == opp['username']
                     ? 'ring-cyan-400'
@@ -454,15 +410,15 @@
     <div
       class="flex flex-row max-w-[100vw] h-[30vh] items-center -space-x-[2.5vh] overflow-x-scroll px-[10vw] no-scrollbar snap-x"
     >
-      {#if $playerState["cards"]}
-        {#each $playerState["cards"] as card, i}
+      {#if playerState["cards"]}
+        {#each playerState["cards"] as card, i}
           <Card
             id="{card}-{i}"
             index={i}
             {card}
             {handleDropCard}
             class="transition-all"
-            style="transform: rotate({(i / $playerState['cards'].length - 0.5) *
+            style="transform: rotate({(i / playerState['cards'].length - 0.5) *
               45}deg)"
           />
         {/each}

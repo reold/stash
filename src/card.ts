@@ -8,7 +8,7 @@ export const cardHelper = {
     else if (color == 0b11) return "yellow";
     else return "pink-500";
   },
-  parseType: (card: number): string => {
+  parseType: (card: number): string | undefined => {
     const type = (card & 0b11_00_0000) >> 6;
 
     if (type == 0b00) return "number";

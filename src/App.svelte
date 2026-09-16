@@ -1,82 +1,81 @@
-<script lang="ts" context="module">
-  import { page, notifications } from "./store";
-
-  const pages = { game: Game };
-
-  export const appendNotification = (msg: string, dur: number = 5) => {
-    notifications.update((state) => {
-      state = [...state, { msg, dur: dur * 1000 }];
-      return state;
-    });
-  };
-</script>
-
 <script lang="ts">
   import { onMount } from "svelte";
-
-  onMount(() => {
-    const hash = window.location.hash.slice(1);
-
-    if (hash != "") {
-      showJoinGame();
-      dialog.form.forEach((entry) => {
-        if (entry["name"] == "game id") {
-          entry["value"] = hash;
-        }
-        return entry;
-      });
-      appendNotification(
-        `enter <b>username</b> and continue to join <b>${hash}</b>`,
-        10
-      );
-    }
-    
-  });
-
-  import { tweened } from "svelte/motion";
   import { cubicInOut } from "svelte/easing";
+  import { Tween } from "svelte/motion";
 
   import Game from "./Game.svelte";
   import { gameServer } from "./requests";
+  import {
+    appendNotification,
+    notifications,
+    page,
+    type HandleColorSelect,
+    type Progress,
+  } from "./store.svelte";
 
   import CardFace from "./assets/StashLogo.png";
 
-  let dialog = {
+  type FormEntry = {
+    name: string;
+    value?: any;
+    type?: string;
+    min?: number;
+    max?: number;
+    options?: { name: string; color: string; value: number }[];
+  };
+
+  type DialogPromise = {
+    resolve: (value?: any) => void;
+    reject: (reason?: any) => void;
+  };
+
+  let dialog = $state<{
+    open: boolean;
+    promise: DialogPromise | undefined;
+    form: FormEntry[];
+  }>({
     open: false,
     promise: undefined,
     form: [],
-  };
+  });
 
-  let notificationEle: HTMLDivElement;
-  const progressTwn = tweened(0, { duration: 100, easing: cubicInOut });
-  const progress = {
+  const progressTwn = new Tween(0, { duration: 100, easing: cubicInOut });
+  const progress: Progress = {
     zero: () => {
       progressTwn.set(0, { duration: 0 });
     },
     complete: () => {
       progressTwn.set(100, { duration: 100 }).then(progress.zero);
     },
-    set: (value) => progressTwn.set(Math.min(Math.max(value, 0), 100)),
+    set: (value: number) => {
+      progressTwn.set(Math.min(Math.max(value, 0), 100));
+    },
   };
 
-  notifications.subscribe((state) => {
-    if (state.length == 0) return state;
+  /**
+   * Notifications used to be appended to the DOM from a store subscription.
+   * Now the queue is rendered by the markup below and every notification
+   * schedules its own removal once it is enqueued.
+   */
+  const notificationTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
-    const cnotification = state[0];
+  $effect(() => {
+    for (const notification of notifications.queue) {
+      if (notificationTimers.has(notification.id)) continue;
 
-    const cPara = document.createElement("p");
-    cPara.className =
-      "animate-pulse opacity-75 min-w-[10vw] max-w-[80vw] bg-gray-950 font-pop text-semibold text-white ring-2 ring-gray-900 mb-2 p-1 text-center rounded-md text-sm";
-    cPara.innerHTML = cnotification.msg;
+      notificationTimers.set(
+        notification.id,
+        setTimeout(() => {
+          notificationTimers.delete(notification.id);
 
-    notificationEle.append(cPara);
-    state.splice(0, 1);
+          const index = notifications.queue.findIndex(
+            (entry) => entry.id === notification.id
+          );
 
-    setTimeout(() => {
-      cPara.remove();
-    }, cnotification.dur);
-
-    return state;
+          if (index != -1) notifications.queue.splice(index, 1);
+        }, notification.dur)
+      );
+    }
   });
 
   const dismissDialog = () => {
@@ -85,7 +84,7 @@
     dialog.promise = undefined;
   };
 
-  const handleColorSelect = () => {
+  const handleColorSelect: HandleColorSelect = () => {
     dialog.form = [
       {
         name: "select color",
@@ -100,7 +99,7 @@
     ];
     dialog.open = true;
 
-    return new Promise((resolve, reject) => {
+    return new Promise<number>((resolve, reject) => {
       dialog.promise = {
         resolve: (color: number) => {
           resolve(color);
@@ -160,7 +159,7 @@
   const handleCreate = async () => {
     progress.set(25);
 
-    let fields = {};
+    let fields: Record<string, any> = {};
 
     dialog.form.forEach((field) => {
       fields[field.name] = field.value;
@@ -179,15 +178,15 @@
         });
         console.log("game created with state", data);
         appendNotification(`<b>successfully created game!</b>`);
-        $page.props = {
+        page.props = {
           game_id: data["key"],
           username: fields["username"],
           handleColorSelect,
           progress,
         };
-        $page.name = "game";
+        page.name = "game";
       } catch (error) {
-        appendNotification(`unable to create game (${error.message})`);
+        appendNotification(`unable to create game (${(error as Error).message})`);
       }
     } else {
       appendNotification("invalid information");
@@ -196,7 +195,7 @@
   };
 
   const handleJoin = () => {
-    let fields = {};
+    let fields: Record<string, any> = {};
 
     dialog.form.forEach((field) => {
       fields[field.name] = field.value;
@@ -212,36 +211,67 @@
         .join(fields["username"], fields["game id"])
         .then(() => {
           appendNotification("successfully joined game", 2);
-          $page.props = {
+          page.props = {
             game_id: fields["game id"],
             username: fields["username"],
             handleColorSelect,
             progress,
           };
-          $page.name = "game";
+          page.name = "game";
         })
         .catch((error) => {
-          appendNotification(`unable to join game (${error.message})`);
+          appendNotification(`unable to join game (${(error as Error).message})`);
         });
     } else {
       appendNotification(`invalid information`);
     }
   };
+
+  onMount(() => {
+    const hash = window.location.hash.slice(1);
+
+    if (hash != "") {
+      showJoinGame();
+      dialog.form.forEach((entry) => {
+        if (entry["name"] == "game id") {
+          entry["value"] = hash;
+        }
+        return entry;
+      });
+      appendNotification(
+        `enter <b>username</b> and continue to join <b>${hash}</b>`,
+        10
+      );
+    }
+  });
+
+  const isColorSelect = $derived(
+    dialog.form.some((entry) => entry.type == "colorselect")
+  );
 </script>
 
 <div class="w-full h-[100vh] relative overflow-hidden">
   <div
-    bind:this={notificationEle}
     class="absolute w-full min-h-[5vh] pt-[2vh] flex flex-col-reverse justify-center items-center z-30"
-  />
+  >
+    {#each notifications.queue as notification (notification.id)}
+      <p
+        class="animate-pulse opacity-75 min-w-[10vw] max-w-[80vw] bg-gray-950 font-pop text-semibold text-white ring-2 ring-gray-900 mb-2 p-1 text-center rounded-md text-sm"
+      >
+        {@html notification.msg}
+      </p>
+    {/each}
+  </div>
   <div
     class="z-20 fixed top-0 left-0 h-[2px] bg-cyan-600"
-    style="width: {$progressTwn}vw;"
-  />
+    style="width: {progressTwn.current}vw;"
+  ></div>
   <button
     style="visibility: {dialog.open ? 'visible' : 'hidden'}"
     class="absolute w-full h-screen p-1 flex flex-col justify-center items-center backdrop-blur-md z-10"
-    on:click|self={dismissDialog}
+    onclick={(event) => {
+      if (event.target == event.currentTarget) dismissDialog();
+    }}
   >
     <div
       class="bg-gray-900 ring-1 text-sm rounded-sm ring-gray-500 flex flex-col justify-center items-center space-y-2 p-2 cursor-text text-md max-w-[50vh] max-sm:max-w-[85vw]"
@@ -276,11 +306,11 @@
           {:else if entry.type == "colorselect"}
             <p>{entry.name}</p>
             <div class="grid grid-cols-2 gap-2">
-              {#each entry.options as option}
+              {#each entry.options ?? [] as option}
                 <button
                   style="background-color: var(--{option.color})"
                   class="aspect-square align-middle p-5 hover:scale-125 duration-75 rounded-sm w-[15ch]"
-                  on:click={() => dialog.promise.resolve(option.value)}
+                  onclick={() => dialog.promise?.resolve(option.value)}
                 >
                   {option.name}
                 </button>
@@ -301,21 +331,21 @@
         {/each}
 
         <div class="flex flex-row justify-center items-center space-x-2">
-          {#if dialog.promise && !dialog.form.find( (entry) => ["colorselect"].includes(entry.type) )}
+          {#if dialog.promise && !isColorSelect}
             <button
               class="bg-green-600 p-2 rounded-sm mt-2"
-              on:click={dialog.promise.resolve}>continue</button
+              onclick={() => dialog.promise?.resolve()}>continue</button
             >
           {/if}
           <button
             class="bg-gray-500 p-2 rounded-sm mt-2"
-            on:click={dismissDialog}>close</button
+            onclick={dismissDialog}>close</button
           >
         </div>
       {/if}
     </div>
   </button>
-  {#if $page.name == "home"}
+  {#if page.name == "home"}
     <div
       class="w-full h-[95vh] p-2 flex flex-col justify-center items-center space-y-10 text-center"
     >
@@ -331,7 +361,7 @@
       <div class="flex flex-row justify-center items-center space-x-5">
         {#each [{ name: "create", color: "bg-green-600", handle: showCreateGame }, { name: "join", color: "bg-blue-700", handle: showJoinGame }, { name: "help", handle: showHelp }] as action}
           <button
-            on:click={() => {
+            onclick={() => {
               if (action.handle) action.handle();
             }}
             class="{action.color
@@ -344,7 +374,7 @@
     </div>
   {:else}
     <div class="w-full h-[95vh]">
-      <svelte:component this={pages[$page.name]} {...$page.props} />
+      <Game {...page.props} />
     </div>
   {/if}
   <div
