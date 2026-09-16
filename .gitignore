@@ -1,8 +1,14 @@
 # Dependency directories
 node_modules/
 
+# SvelteKit
+.svelte-kit/
+build/
+dist/
+
 # IDE related
 .idea
+.vscode
 
 # Test coverage
 coverage

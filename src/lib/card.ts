@@ -15,7 +15,7 @@ export const cardHelper = {
     else if (type == 0b01) return "plus2";
     else if (type == 0b10) return "plus4";
     else if (type == 0b11) return "reverse";
-    else return;
+    else return "number";
   },
   parseNumber: (card: number): number => {
     return card & 0b1111;

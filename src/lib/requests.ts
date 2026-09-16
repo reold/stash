@@ -6,7 +6,7 @@ export const apiURL = serverURL + "/api";
 export const gameServer = {
   create: async (
     creator: string,
-    config: { max_players?: number; card_count?: number } = {}
+    config: { max_players?: number; card_count?: number } = {},
   ) => {
     let body = JSON.stringify({ creator, config });
 
@@ -26,10 +26,7 @@ export const gameServer = {
   },
 
   join: async (username: string, game_id: string) => {
-    let resp = await fetch(
-      `${apiURL}/join/${game_id}?username=${username}`,
-      {}
-    );
+    let resp = await fetch(`${apiURL}/join/${game_id}?username=${username}`, {});
 
     if (resp.status != 200) {
       throw new Error(await resp.text());
@@ -38,7 +35,7 @@ export const gameServer = {
 
   state: async (game_id: string, depth: number, username: string = "") => {
     let resp = await fetch(
-      `${apiURL}/${game_id}/state?depth=${depth}&username=${username}`
+      `${apiURL}/${game_id}/state?depth=${depth}&username=${username}`,
     );
 
     if (resp.status != 200) {
@@ -48,7 +45,12 @@ export const gameServer = {
     return await resp.json();
   },
 
-  action: async (game_id, username: string, type: number, card: number = 0) => {
+  action: async (
+    game_id: string,
+    username: string,
+    type: number,
+    card: number = 0,
+  ) => {
     let body = JSON.stringify({ username, type, card });
 
     let resp = await fetch(`${apiURL}/${game_id}/action`, {

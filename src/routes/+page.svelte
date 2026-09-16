@@ -1,53 +1,41 @@
-<script lang="ts" context="module">
-  import { page, notifications } from "./store";
-
-  const pages = { game: Game };
-
-  export const appendNotification = (msg: string, dur: number = 5) => {
-    notifications.update((state) => {
-      state = [...state, { msg, dur: dur * 1000 }];
-      return state;
-    });
-  };
-</script>
-
 <script lang="ts">
   import { onMount } from "svelte";
-
-  onMount(() => {
-    const hash = window.location.hash.slice(1);
-
-    if (hash != "") {
-      showJoinGame();
-      dialog.form.forEach((entry) => {
-        if (entry["name"] == "game id") {
-          entry["value"] = hash;
-        }
-        return entry;
-      });
-      appendNotification(
-        `enter <b>username</b> and continue to join <b>${hash}</b>`,
-        10
-      );
-    }
-    
-  });
-
+  import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { tweened } from "svelte/motion";
   import { cubicInOut } from "svelte/easing";
+  import { gameServer } from "$lib/requests";
+  import { notifications, appendNotification } from "$lib/stores";
+  import CardFace from "$lib/assets/StashLogo.png";
+  import { page } from "$app/state";
 
-  import Game from "./Game.svelte";
-  import { gameServer } from "./requests";
+  // Dialog state using runes
+  type DialogEntry = {
+    name: string;
+    value?: any;
+    type?: string;
+    min?: number;
+    max?: number;
+    options?: { name: string; color: string; value: number }[];
+  };
 
-  import CardFace from "./assets/StashLogo.png";
+  type DialogPromise = {
+    resolve: (v?: any) => void;
+    reject: () => void;
+  };
 
-  let dialog = {
+  let dialog = $state<{
+    open: boolean;
+    promise: DialogPromise | undefined;
+    form: DialogEntry[];
+  }>({
     open: false,
     promise: undefined,
     form: [],
-  };
+  });
 
-  let notificationEle: HTMLDivElement;
+  let notificationContainer = $state<HTMLDivElement | null>(null);
+
   const progressTwn = tweened(0, { duration: 100, easing: cubicInOut });
   const progress = {
     zero: () => {
@@ -56,28 +44,37 @@
     complete: () => {
       progressTwn.set(100, { duration: 100 }).then(progress.zero);
     },
-    set: (value) => progressTwn.set(Math.min(Math.max(value, 0), 100)),
+    set: (value: number) => progressTwn.set(Math.min(Math.max(value, 0), 100)),
   };
 
+  // Notifications handling - declarative rendering instead of direct DOM manipulation
+  // Keep compatibility with old store subscription approach by reacting to store changes
+  // We'll render notifications via {#each} but also support timeout removal
+  let visibleNotifications = $state<{ id: number; msg: string; timeout: number }[]>([]);
+  let notifId = 0;
+
+  // Subscribe to notifications store for external calls
   notifications.subscribe((state) => {
-    if (state.length == 0) return state;
-
-    const cnotification = state[0];
-
-    const cPara = document.createElement("p");
-    cPara.className =
-      "animate-pulse opacity-75 min-w-[10vw] max-w-[80vw] bg-gray-950 font-pop text-semibold text-white ring-2 ring-gray-900 mb-2 p-1 text-center rounded-md text-sm";
-    cPara.innerHTML = cnotification.msg;
-
-    notificationEle.append(cPara);
-    state.splice(0, 1);
-
-    setTimeout(() => {
-      cPara.remove();
-    }, cnotification.dur);
-
-    return state;
+    if (state.length === 0) return;
+    // drain store
+    for (const n of state) {
+      const id = notifId++;
+      visibleNotifications = [
+        ...visibleNotifications,
+        { id, msg: n.msg, timeout: n.dur },
+      ];
+      setTimeout(() => {
+        visibleNotifications = visibleNotifications.filter((x) => x.id !== id);
+      }, n.dur);
+    }
+    // clear store
+    notifications.set([]);
   });
+
+  // Local append that uses visibleNotifications directly too
+  function localAppend(msg: string, dur: number = 5) {
+    appendNotification(msg, dur);
+  }
 
   const dismissDialog = () => {
     dialog.open = false;
@@ -100,7 +97,7 @@
     ];
     dialog.open = true;
 
-    return new Promise((resolve, reject) => {
+    return new Promise<number>((resolve, reject) => {
       dialog.promise = {
         resolve: (color: number) => {
           resolve(color);
@@ -112,9 +109,7 @@
   };
 
   const showCreateGame = () => {
-    appendNotification(
-      "enter your <b>username</b> and <b>game configuration</b>"
-    );
+    localAppend("enter your <b>username</b> and <b>game configuration</b>");
 
     dialog.form = [
       { name: "username", value: "" },
@@ -132,11 +127,11 @@
     };
   };
 
-  const showJoinGame = () => {
-    appendNotification("enter your <b>username</b> and <b>game id<b/>");
+  const showJoinGame = (prefillId = "") => {
+    localAppend("enter your <b>username</b> and <b>game id<b/>");
     dialog.form = [
       { name: "username", value: "" },
-      { name: "game id", value: "" },
+      { name: "game id", value: prefillId },
     ];
 
     dialog.open = true;
@@ -149,28 +144,25 @@
   };
 
   const showHelp = () => {
-    appendNotification(
-      "contact <b>@redicrafty on X</b> or <b>@0digt on Instagram</b>"
+    localAppend(
+      "contact <b>@redicrafty on X</b> or <b>@0digt on Instagram</b>",
     );
     handleColorSelect()
-      .then((color) => appendNotification(`you chose <b>${color}</b> color`))
+      .then((color) => localAppend(`you chose <b>${color}</b> color`))
       .catch(() => {});
   };
 
   const handleCreate = async () => {
     progress.set(25);
 
-    let fields = {};
-
+    let fields: Record<string, any> = {};
     dialog.form.forEach((field) => {
       fields[field.name] = field.value;
     });
 
     dialog.open = false;
     if (fields["username"] && fields["max players"]) {
-      appendNotification(
-        `creating a <b>${fields["max players"]} player game</b>`
-      );
+      localAppend(`creating a <b>${fields["max players"]} player game</b>`);
 
       try {
         const data = await gameServer.create(fields["username"], {
@@ -178,70 +170,107 @@
           card_count: fields["card count"],
         });
         console.log("game created with state", data);
-        appendNotification(`<b>successfully created game!</b>`);
-        $page.props = {
-          game_id: data["key"],
-          username: fields["username"],
-          handleColorSelect,
-          progress,
-        };
-        $page.name = "game";
-      } catch (error) {
-        appendNotification(`unable to create game (${error.message})`);
+        localAppend(`<b>successfully created game!</b>`);
+        const gameId = data["key"];
+        const username = fields["username"];
+        // Navigate to split route - use typed resolve for dynamic param
+        await goto(
+          `${resolve("/game/[id]", { id: gameId })}?username=${encodeURIComponent(username)}`,
+        );
+      } catch (error: any) {
+        localAppend(`unable to create game (${error.message})`);
       }
     } else {
-      appendNotification("invalid information");
+      localAppend("invalid information");
     }
     progress.complete();
   };
 
   const handleJoin = () => {
-    let fields = {};
-
+    let fields: Record<string, any> = {};
     dialog.form.forEach((field) => {
       fields[field.name] = field.value;
     });
 
     dialog.open = false;
     if (fields["username"] && fields["game id"]) {
-      appendNotification(
+      localAppend(
         `trying to join ${fields["game id"]} as ${fields["username"]} `,
-        2
+        2,
       );
       gameServer
         .join(fields["username"], fields["game id"])
-        .then(() => {
-          appendNotification("successfully joined game", 2);
-          $page.props = {
-            game_id: fields["game id"],
-            username: fields["username"],
-            handleColorSelect,
-            progress,
-          };
-          $page.name = "game";
+        .then(async () => {
+          localAppend("successfully joined game", 2);
+          await goto(
+            `${resolve("/game/[id]", { id: fields["game id"] })}?username=${encodeURIComponent(fields["username"])}`,
+          );
         })
-        .catch((error) => {
-          appendNotification(`unable to join game (${error.message})`);
+        .catch((error: any) => {
+          localAppend(`unable to join game (${error.message})`);
         });
     } else {
-      appendNotification(`invalid information`);
+      localAppend(`invalid information`);
     }
   };
+
+  onMount(() => {
+    const hash = window.location.hash.slice(1);
+    if (hash != "") {
+      showJoinGame(hash);
+      dialog.form.forEach((entry) => {
+        if (entry["name"] == "game id") {
+          entry["value"] = hash;
+        }
+        return entry;
+      });
+      localAppend(
+        `enter <b>username</b> and continue to join <b>${hash}</b>`,
+        10,
+      );
+    }
+
+    // Also handle ?join=gameId query for new share links backwards compat
+    const urlParams = new URLSearchParams(window.location.search);
+    const joinParam = urlParams.get("join");
+    if (joinParam) {
+      showJoinGame(joinParam);
+    }
+  });
 </script>
+
+<svelte:head>
+  <title>Stash - Where Strategy Meets the Shuffle</title>
+</svelte:head>
 
 <div class="w-full h-[100vh] relative overflow-hidden">
   <div
-    bind:this={notificationEle}
-    class="absolute w-full min-h-[5vh] pt-[2vh] flex flex-col-reverse justify-center items-center z-30"
-  />
+    bind:this={notificationContainer}
+    class="absolute w-full min-h-[5vh] pt-[2vh] flex flex-col-reverse justify-center items-center z-30 pointer-events-none"
+  >
+    {#each visibleNotifications as n (n.id)}
+      <p
+        class="animate-pulse opacity-75 min-w-[10vw] max-w-[80vw] bg-gray-950 font-pop text-semibold text-white ring-2 ring-gray-900 mb-2 p-1 text-center rounded-md text-sm pointer-events-auto"
+      >
+        {@html n.msg}
+      </p>
+    {/each}
+  </div>
   <div
     class="z-20 fixed top-0 left-0 h-[2px] bg-cyan-600"
     style="width: {$progressTwn}vw;"
-  />
-  <button
+  ></div>
+  <div
     style="visibility: {dialog.open ? 'visible' : 'hidden'}"
     class="absolute w-full h-screen p-1 flex flex-col justify-center items-center backdrop-blur-md z-10"
-    on:click|self={dismissDialog}
+    onclick={(e) => {
+      if (e.target === e.currentTarget) dismissDialog();
+    }}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') dismissDialog();
+    }}
+    role="button"
+    tabindex="-1"
   >
     <div
       class="bg-gray-900 ring-1 text-sm rounded-sm ring-gray-500 flex flex-col justify-center items-center space-y-2 p-2 cursor-text text-md max-w-[50vh] max-sm:max-w-[85vw]"
@@ -276,11 +305,11 @@
           {:else if entry.type == "colorselect"}
             <p>{entry.name}</p>
             <div class="grid grid-cols-2 gap-2">
-              {#each entry.options as option}
+              {#each entry.options ?? [] as option}
                 <button
                   style="background-color: var(--{option.color})"
                   class="aspect-square align-middle p-5 hover:scale-125 duration-75 rounded-sm w-[15ch]"
-                  on:click={() => dialog.promise.resolve(option.value)}
+                  onclick={() => dialog.promise?.resolve(option.value)}
                 >
                   {option.name}
                 </button>
@@ -301,52 +330,44 @@
         {/each}
 
         <div class="flex flex-row justify-center items-center space-x-2">
-          {#if dialog.promise && !dialog.form.find( (entry) => ["colorselect"].includes(entry.type) )}
+          {#if dialog.promise && !dialog.form.find((entry) => ["colorselect"].includes(entry.type ?? ""))}
             <button
               class="bg-green-600 p-2 rounded-sm mt-2"
-              on:click={dialog.promise.resolve}>continue</button
+              onclick={() => dialog.promise?.resolve()}>continue</button
             >
           {/if}
-          <button
-            class="bg-gray-500 p-2 rounded-sm mt-2"
-            on:click={dismissDialog}>close</button
+          <button class="bg-gray-500 p-2 rounded-sm mt-2" onclick={dismissDialog}
+            >close</button
           >
         </div>
       {/if}
     </div>
-  </button>
-  {#if $page.name == "home"}
-    <div
-      class="w-full h-[95vh] p-2 flex flex-col justify-center items-center space-y-10 text-center"
-    >
-      <div class="flex flex-col justify-center items-center -space-y-20">
-        <img src={CardFace} alt="stash logo" class="w-[50vh] sm:h-[50vh]" />
-        <p
-          class="text-white"
-          style="text-shadow: 0px 3px 3px rgba(15, 23, 42);"
+  </div>
+
+  <div
+    class="w-full h-[95vh] p-2 flex flex-col justify-center items-center space-y-10 text-center"
+  >
+    <div class="flex flex-col justify-center items-center -space-y-20">
+      <img src={CardFace} alt="stash logo" class="w-[50vh] sm:h-[50vh]" />
+      <p class="text-white" style="text-shadow: 0px 3px 3px rgba(15, 23, 42);">
+        Where Strategy Meets the Shuffle - Play Your Cards Wisely!
+      </p>
+    </div>
+    <div class="flex flex-row justify-center items-center space-x-5">
+      {#each [{ name: "create", color: "bg-green-600", handle: showCreateGame }, { name: "join", color: "bg-blue-700", handle: () => showJoinGame() }, { name: "help", handle: showHelp }] as action}
+        <button
+          onclick={() => {
+            if (action.handle) action.handle();
+          }}
+          class="{action.color
+            ? action.color
+            : 'bg-gray-950'} p-2 text-lg rounded-xl hover:scale-125 duration-150 delay-75"
+          >{action.name}</button
         >
-          Where Strategy Meets the Shuffle - Play Your Cards Wisely!
-        </p>
-      </div>
-      <div class="flex flex-row justify-center items-center space-x-5">
-        {#each [{ name: "create", color: "bg-green-600", handle: showCreateGame }, { name: "join", color: "bg-blue-700", handle: showJoinGame }, { name: "help", handle: showHelp }] as action}
-          <button
-            on:click={() => {
-              if (action.handle) action.handle();
-            }}
-            class="{action.color
-              ? action.color
-              : 'bg-gray-950'} p-2 text-lg rounded-xl hover:scale-125 duration-150 delay-75"
-            >{action.name}</button
-          >
-        {/each}
-      </div>
+      {/each}
     </div>
-  {:else}
-    <div class="w-full h-[95vh]">
-      <svelte:component this={pages[$page.name]} {...$page.props} />
-    </div>
-  {/if}
+  </div>
+
   <div
     class="w-full h-[5vh] flex flex-row justify-center items-center space-x-1 bg-gray-950 text-white text-center text-xs"
   >
